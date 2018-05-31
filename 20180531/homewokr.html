@@ -1,0 +1,36 @@
+<!doctype html> <!-- homewokr.html -->
+<html lang="ko">
+  <head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link rel="stylesheet" href="../css/sample.css"/>
+  <title>웹 프로그래밍 실습</title>
+  </head>
+  <body>
+  <header><h2>실습 대환영</h2></header>
+  <nav><ul><li><a href="http://hive.dju.ac.kr">실습서버</a></li></ul></nav>
+  <section><h4>for 예제 실습</h4>
+  <script>
+   var max_students=0;
+   var im;
+   var score =0;
+   var result =0;
+    max_students =window.prompt("학생수:");
+        max_students=parseFloat(max_students);
+        im = max_students;
+        while(im>0)
+        {
+        im--;
+        score =window.prompt("점수 입력:");
+        score=parseFloat(score);
+        result = result+score;
+        }
+        result = result/max_students;
+        document.write(result,"");
+  
+var value = sumy(10,20,30);
+printValue(value);
+printValue("a",10,15,"v");
+    </script>
+  </section>
+  <footer><p>&copy;20XX Made by Korea. All rights reserved.</p></footer>
+  </body>
+</html>
