@@ -114,8 +114,10 @@ const app = document.getElementById("app");
 const esc = s => String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const ls = {get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}},del(k){try{localStorage.removeItem(k)}catch(e){}}};
 const rid = n => Array.from({length:n},()=>ALPHA[Math.floor(Math.random()*32)]).join("");
-const me = {cid: ls.get("liar.cid") || rid(10), name: ls.get("liar.name","")};
-ls.set("liar.cid", me.cid);
+// 탭마다 다른 참가자 (새로고침해도 유지)
+const ss = {get(k){try{return sessionStorage.getItem(k)}catch(e){return null}},set(k,v){try{sessionStorage.setItem(k,v)}catch(e){}}};
+const me = {cid: ss.get("liar.cid") || rid(10), name: ls.get("liar.name","")};
+ss.set("liar.cid", me.cid);
 
 let mode = "home";   // home | host | guest
 let view = null;     // current view object being rendered
@@ -407,7 +409,7 @@ app.addEventListener("click",async e=>{
   const a=b.dataset.a, v=b.dataset.v;
   if(a==="create"){if(!readName())return;resumeAttempt=false;startHost(null)}
   else if(a==="join"){if(!readName())return;const c=(document.getElementById("codeIn").value||"").toUpperCase().trim();if(c.length!==4){document.getElementById("homeErr").textContent="방 코드 4자리를 써주세요";return}history.replaceState(null,"",location.pathname);startGuest(c)}
-  else if(a==="resume-host"){const sh=ls.get("liar.host",null);if(!sh)return;me.name=(sh.players.find(p=>p.cid===me.cid)||{}).name||me.name;resumeAttempt=true;startHost(sh)}
+  else if(a==="resume-host"){const sh=ls.get("liar.host",null);if(!sh)return;me.cid=sh.players[0].cid;ss.set("liar.cid",me.cid);me.name=(sh.players.find(p=>p.cid===me.cid)||{}).name||me.name;resumeAttempt=true;startHost(sh)}
   else if(a==="resume-guest"){const sg=ls.get("liar.guest",null);if(!sg||!me.name){if(!readName())return}startGuest(sg.code)}
   else if(a==="leave")leave();
   else if(a==="copy"){const txt=`🕵️ 라이어게임 ㄱㄱ\n링크 열고 이름만 쓰면 바로 참가!\n${shareLink(view.code)}\n(방 코드: ${view.code})`;
