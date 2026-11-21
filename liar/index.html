@@ -156,20 +156,21 @@ function startRound(){
   const ids = H.players.filter(p=>isOnline(p.cid)).map(p=>p.cid);
   if(ids.length<3)return "온라인 인원이 3명 이상이어야 해요";
   const pk = pickPair();
-  Object.assign(H,pk,{round:H.round+1,phase:"play",inRound:ids,liar:ids[Math.floor(Math.random()*ids.length)],first:ids[Math.floor(Math.random()*ids.length)],votes:{},candidates:null,revote:false,result:null});
+  Object.assign(H,pk,{round:H.round+1,phase:"play",inRound:ids,liar:ids[Math.floor(Math.random()*ids.length)],first:ids[Math.floor(Math.random()*ids.length)],votes:{},candidates:null,revote:false,result:null,alive:ids.slice(),out:[],lastOut:null,turn:1});
   return null;
 }
 function startVote(){H.phase="vote";H.votes={};H.candidates=null;H.revote=false}
+function continueTalk(){H.phase="play";H.turn=(H.turn||1)+1;H.first=H.alive[Math.floor(Math.random()*H.alive.length)];H.votes={};H.candidates=null;H.revote=false}
 function castVote(voter,target){
-  if(H.phase!=="vote"||!H.inRound.includes(voter)||voter===target)return;
-  const cands = H.candidates||H.inRound;
+  if(H.phase!=="vote"||!H.alive.includes(voter)||voter===target)return;
+  const cands = H.candidates||H.alive;
   if(!cands.includes(target))return;
   H.votes[voter]=target;
-  const need = H.inRound.filter(isOnline);
+  const need = H.alive.filter(isOnline);
   if(need.every(c=>H.votes[c]))tally();
 }
 function tally(){
-  const cands = H.candidates||H.inRound, cnt = {};
+  const cands = H.candidates||H.alive, cnt = {};
   cands.forEach(c=>cnt[c]=0);
   Object.values(H.votes).forEach(t=>{if(t in cnt)cnt[t]++});
   const max = Math.max(0,...Object.values(cnt));
@@ -177,22 +178,27 @@ function tally(){
   const top = cands.filter(c=>cnt[c]===max);
   if(top.length>1){H.candidates=top;H.votes={};H.revote=true;H.lastTie={names:top.map(pName),n:max};return}
   const target = top[0];
-  H.phase="result";
-  H.result={target,isLiar:target===H.liar,liar:H.liar,tally:H.inRound.map(c=>({cid:c,n:cnt[c]||0})).sort((a,b)=>b.n-a.n)};
+  const tl = H.alive.map(c=>({cid:c,n:cnt[c]||0})).sort((a,b)=>b.n-a.n);
+  if(target===H.liar){H.phase="result";H.result={target,isLiar:true,liar:H.liar,tally:tl};return}
+  H.out.push(target); H.alive=H.alive.filter(c=>c!==target); H.lastOut={target,tally:tl};
+  if(H.alive.length<=2){H.phase="result";H.result={target,isLiar:false,survived:true,liar:H.liar,tally:tl};return}
+  H.phase="out";
 }
 function makeView(cid){
   const inR = H.inRound.includes(cid);
   const v = {
     code:H.code, phase:H.phase, me:cid, isHost:cid===me.cid, round:H.round, catSel:H.catSel,
-    players:H.players.map(p=>({cid:p.cid,name:p.name,online:isOnline(p.cid),host:p.cid===me.cid,inRound:H.inRound.includes(p.cid),voted:!!H.votes[p.cid]})),
+    players:H.players.map(p=>({cid:p.cid,name:p.name,online:isOnline(p.cid),host:p.cid===me.cid,inRound:H.inRound.includes(p.cid),alive:(H.alive||[]).includes(p.cid),voted:!!H.votes[p.cid]})),
+    alive:(H.alive||[]).includes(cid), turn:H.turn||1, aliveN:(H.alive||[]).length, outNames:(H.out||[]).map(pName),
     inRound:inR, catName:H.phase==="lobby"?"":H.catName, firstName:H.first?pName(H.first):"",
     word: inR && H.phase!=="lobby" ? (cid===H.liar?H.lw:H.cw) : null,
-    candidates:H.candidates||H.inRound, revote:H.revote, tie:H.revote?H.lastTie:null,
-    myVote:H.votes[cid]||null, votedN:Object.keys(H.votes).length, needN:H.inRound.filter(isOnline).length
+    candidates:H.candidates||H.alive||[], revote:H.revote, tie:H.revote?H.lastTie:null,
+    myVote:H.votes[cid]||null, votedN:Object.keys(H.votes).length, needN:(H.alive||[]).filter(isOnline).length
   };
+  if(H.phase==="out"){const o=H.lastOut;v.out={name:pName(o.target),isMe:o.target===cid,tally:o.tally.concat([{cid:o.target,n:0}]).filter((t,i,a)=>a.findIndex(x=>x.cid===t.cid)===i).map(t=>({name:pName(t.cid),n:t.n,hot:t.cid===o.target}))}}
   if(H.phase==="result"){
     const r=H.result;
-    v.result={targetName:pName(r.target),isLiar:r.isLiar,liarName:pName(r.liar),iWasLiar:cid===r.liar,cw:H.cw,lw:H.lw,tally:r.tally.map(t=>({name:pName(t.cid),n:t.n,hot:t.cid===r.target}))};
+    v.result={targetName:pName(r.target),isLiar:r.isLiar,survived:!!r.survived,liarName:pName(r.liar),iWasLiar:cid===r.liar,cw:H.cw,lw:H.lw,tally:r.tally.map(t=>({name:pName(t.cid),n:t.n,hot:t.cid===r.target}))};
   }
   return v;
 }
@@ -206,9 +212,10 @@ function hostAct(a,arg){
   if(a==="cat"){H.catSel=arg}
   else if(a==="start"||a==="next"){err=startRound()}
   else if(a==="vote-start"){startVote()}
+  else if(a==="continue"){continueTalk()}
   else if(a==="vote"){castVote(me.cid,arg)}
   else if(a==="tally"){tally()}
-  else if(a==="kick"){if(arg!==me.cid){H.players=H.players.filter(p=>p.cid!==arg);H.inRound=H.inRound.filter(c=>c!==arg);if(conns[arg]){try{conns[arg].send({t:"kicked"});conns[arg].close()}catch(e){}delete conns[arg]}}}
+  else if(a==="kick"){if(arg!==me.cid){H.players=H.players.filter(p=>p.cid!==arg);H.inRound=H.inRound.filter(c=>c!==arg);H.alive=(H.alive||[]).filter(c=>c!==arg);if(conns[arg]){try{conns[arg].send({t:"kicked"});conns[arg].close()}catch(e){}delete conns[arg]}}}
   else if(a==="lobby"){H.phase="lobby"}
   broadcast();
   if(err)flash(err);
@@ -246,7 +253,7 @@ function openHostPeer(tries){
 }
 let resumeAttempt=false;
 function onPlayerLeft(){
-  if(H.phase==="vote"){const need=H.inRound.filter(isOnline);if(need.length&&need.every(c=>H.votes[c]))tally()}
+  if(H.phase==="vote"){const need=H.alive.filter(isOnline);if(need.length&&need.every(c=>H.votes[c]))tally()}
   broadcast();
 }
 function hostOnData(conn,d){
@@ -325,13 +332,14 @@ function render(){
   else if(!v.inRound)h+=`<div class="info"><b>이번 판은 관전!</b><br><span class="mute">게임 중간에 들어와서 다음 라운드부터 참여해요.</span></div>`+(v.phase==="result"?renderResult(v):"");
   else if(v.phase==="play")h+=renderPlay(v);
   else if(v.phase==="vote")h+=renderVote(v);
+  else if(v.phase==="out")h+=renderOut(v);
   else if(v.phase==="result")h+=renderResult(v);
   h+=`<button class="btn ghost" data-a="leave">${v.isHost?"방 닫기":"방 나가기"}</button>`;
   app.innerHTML=h;
   const f=document.getElementById("flip"); if(f&&cardOpen)f.classList.add("open");
 }
 function plist(v,showVoted){
-  return `<div class="plist">${v.players.map(p=>`<div class="p${p.online?"":" off"}"><span class="nm">${esc(p.name)}${p.cid===v.me?" (나)":""}</span>${p.host?'<span class="tag">방장</span>':""}${!p.online?'<span class="tag">연결끊김</span>':""}${showVoted&&p.inRound?(p.voted?'<span class="tag ok">투표완료</span>':'<span class="tag">고민중</span>'):""}${v.isHost&&!p.host&&v.phase==="lobby"?`<button class="x" data-a="kick" data-v="${esc(p.cid)}" aria-label="내보내기">×</button>`:""}</div>`).join("")}</div>`;
+  return `<div class="plist">${v.players.map(p=>`<div class="p${p.online?"":" off"}"><span class="nm">${esc(p.name)}${p.cid===v.me?" (나)":""}</span>${p.host?'<span class="tag">방장</span>':""}${v.phase!=="lobby"&&p.inRound&&!p.alive?'<span class="tag">탈락</span>':""}${!p.online?'<span class="tag">연결끊김</span>':""}${showVoted&&p.alive?(p.voted?'<span class="tag ok">투표완료</span>':'<span class="tag">고민중</span>'):""}${v.isHost&&!p.host&&v.phase==="lobby"?`<button class="x" data-a="kick" data-v="${esc(p.cid)}" aria-label="내보내기">×</button>`:""}</div>`).join("")}</div>`;
 }
 function renderLobby(v){
   let h=`<h2>대기실</h2>`;
@@ -351,13 +359,14 @@ function cardHtml(v){
 }
 function renderPlay(v){
   const key=v.code+v.round; if(key!==lastWordKey){lastWordKey=key;cardOpen=false}
-  let h=`<h2>${v.round}라운드</h2>${cardHtml(v)}<div class="info"><b>${esc(v.firstName)}</b>부터 시계방향으로 한 마디씩!</div>`;
+  let h=`<h2>${v.round}라운드${v.turn>1?` · ${v.turn}번째 토크`:""}</h2>${!v.alive?`<div class="info" style="margin-bottom:10px"><b>탈락했어요.</b> 이제 관전만! 라이어 정체는 스포 금지 🤐</div>`:""}${cardHtml(v)}<div class="info"><b>${esc(v.firstName)}</b>부터 시계방향으로 한 마디씩!${v.outNames.length?`<br><span class="mute small">탈락: ${v.outNames.map(esc).join(", ")} · 남은 ${v.aliveN}명</span>`:""}</div>`;
   if(v.isHost)h+=`<button class="btn pri" data-a="vote-start">토크 끝! 투표 시작</button><button class="btn" data-a="next">제시어 바꿔서 다시</button>`;
   else h+=`<p class="mute small" style="text-align:center;margin-top:14px">방장이 투표를 열면 여기서 투표해요</p>`;
   return h;
 }
 function renderVote(v){
   let h=`<h2>${v.revote?"동점! 재투표":"라이어는 누구?"}</h2>`;
+  if(!v.alive){return h+`<div class="info"><b>탈락해서 투표 못 해요.</b><br><span class="mute">남은 사람들이 투표하는 중…</span></div><div class="label">투표 ${v.votedN}/${v.needN}</div><div class="meter"><i style="width:${v.needN?Math.round(v.votedN/v.needN*100):0}%"></i></div>${plist(v,true)}`+(v.isHost?`<button class="btn" data-a="tally" ${v.votedN?"":"disabled"}>지금 바로 개표</button>`:"")}
   if(v.tie)h+=`<p class="mute">${v.tie.names.map(esc).join(", ")} 동점. 한 마디씩 더 해명하고 다시 투표!</p>`;
   else h+=`<p class="mute">자기 자신은 못 찍어요. 바꾸고 싶으면 다시 누르면 돼요.</p>`;
   h+=`<div class="vgrid">${v.candidates.map(cid=>{const p=v.players.find(x=>x.cid===cid)||{name:"?"};return `<button class="vbtn${v.myVote===cid?" on":""}" data-a="vote" data-v="${esc(cid)}" ${cid===v.me?"disabled":""}>${esc(p.name)}${cid===v.me?"<br><span class='small'>(나)</span>":""}</button>`}).join("")}</div>`;
@@ -366,9 +375,19 @@ function renderVote(v){
   if(v.isHost)h+=`<button class="btn" data-a="tally" ${v.votedN?"":"disabled"}>지금 바로 개표</button>`;
   return h;
 }
+function renderOut(v){
+  const o=v.out,max=Math.max(1,...o.tally.map(t=>t.n));
+  let h=`<div class="result lose"><div class="big">${esc(o.name)} 탈락</div><div style="font-weight:600">${o.isMe?"당신은":esc(o.name)+"은(는)"} 시민이었습니다.<br>라이어는 아직 숨어 있다… 남은 ${v.aliveN}명</div></div>`;
+  h+=`<div class="label">득표</div><div class="tally">${o.tally.map(t=>`<div class="trow${t.hot?" hot":""}"><span>${esc(t.name)}</span><span class="tb"><i style="width:${t.n/max*100}%"></i></span><span>${t.n}</span></div>`).join("")}</div>`;
+  h+=`<p class="mute small" style="margin-top:12px">${v.aliveN<=3?"⚠️ 한 명만 더 시민이 탈락하면 라이어 승리!":"남은 사람끼리 한 바퀴 더 토크하고 다시 투표해요."}</p>`;
+  if(v.isHost)h+=`<button class="btn pri" data-a="continue">다시 토크 → 투표</button>`;
+  else h+=`<p class="mute small" style="text-align:center">방장이 다음 토크를 시작하면 진행돼요</p>`;
+  return h;
+}
 function renderResult(v){
   const r=v.result,max=Math.max(1,...r.tally.map(t=>t.n));
-  let h=`<div class="result ${r.isLiar?"win":"lose"}"><div class="big">${r.isLiar?"검거 성공!":"땡! 시민이었음"}</div><div style="font-weight:600">${r.isLiar?`${esc(r.targetName)} = 라이어. 시민 승리`:`${esc(r.targetName)}은(는) 억울한 시민. 진짜 라이어는 ${esc(r.liarName)}! 라이어 승리`}</div></div>`;
+  let h=`<div class="result ${r.isLiar?"win":"lose"}"><div class="big">${r.isLiar?"검거 성공!":"라이어 생존!"}</div><div style="font-weight:600">${r.isLiar?`${esc(r.targetName)} = 라이어. 시민 승리`:`${esc(r.targetName)}도 시민… 최후 2인까지 살아남은 라이어는 ${esc(r.liarName)}! 라이어 승리`}</div></div>`;
+  if(v.outNames.length)h+=`<p class="mute small" style="text-align:center">억울하게 탈락한 시민: ${v.outNames.filter(n=>!(r.isLiar&&false)).map(esc).join(", ")}</p>`;
   if(r.iWasLiar)h+=`<p style="text-align:center;font-weight:800">사실 당신이 라이어였습니다 🤫</p>`;
   h+=`<div class="words"><div><span class="small mute">시민 제시어</span><b>${esc(r.cw)}</b></div><div><span class="small mute">라이어 제시어</span><b>${esc(r.lw)}</b></div></div>`;
   h+=`<div class="label">득표</div><div class="tally">${r.tally.map(t=>`<div class="trow${t.hot?" hot":""}"><span>${esc(t.name)}</span><span class="tb"><i style="width:${t.n/max*100}%"></i></span><span>${t.n}</span></div>`).join("")}</div>`;
@@ -394,7 +413,7 @@ function renderHome(){
   <li>다들 링크 열고 이름 쓰고 참가. 방장이 카테고리 고르고 시작.</li>
   <li>카드 뒤집으면 제시어. 한 명만 비슷한 <b>다른 단어</b>를 받는데 그게 라이어. 본인은 몰라요.</li>
   <li>순서대로 한 마디씩 설명하고, 방장이 투표 열면 각자 폰으로 투표.</li>
-  <li>최다 득표자가 라이어면 시민 승, 아니면 라이어 승. 동점이면 재투표.</li></ol></details>`;
+  <li>최다 득표자가 시민이면 그 사람만 탈락하고, 남은 사람끼리 다시 토크·투표. 라이어를 잡으면 시민 승, 라이어가 최후 2인까지 살아남으면 라이어 승. 동점이면 재투표.</li></ol></details>`;
 }
 function readName(){
   const n=(document.getElementById("nameIn").value||"").trim().slice(0,10);
