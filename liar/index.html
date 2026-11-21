@@ -78,6 +78,7 @@ input.code{height:72px;text-align:center;font:400 40px "Black Han Sans";letter-s
 .trow.hot .tb i{background:var(--acc)}
 .trow span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
 .trow span:last-child{text-align:right}
+.timer{background:var(--bg2);border:2px solid var(--line);border-radius:16px;padding:12px 16px;margin-top:12px;display:grid;grid-template-columns:1fr auto;align-items:center;gap:4px 10px}.timer .tl{font-weight:800;color:var(--mute)}.timer .tt{font:400 34px "Black Han Sans";font-variant-numeric:tabular-nums}.timer .meter{grid-column:1/-1;margin-top:4px}.timer.hurry .tt{color:var(--red)}.timer.hurry .meter i{background:var(--red)}
 .wait{text-align:center;padding:30px 10px}
 .spin{width:40px;height:40px;border:4px solid var(--line);border-top-color:var(--acc);border-radius:50%;margin:0 auto 14px;animation:sp 1s linear infinite}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -130,7 +131,7 @@ function setStatus(t){const s=document.getElementById("status");s.textContent=t|
 /* =================== HOST ENGINE =================== */
 let H = null;            // host state (saved)
 const conns = {};        // cid -> conn
-function newHostState(code){return {code,catSel:RANDOM,round:0,phase:"lobby",players:[{cid:me.cid,name:me.name}],inRound:[],liar:null,cw:"",lw:"",catName:"",first:null,votes:{},candidates:null,revote:false,result:null,used:[],ts:Date.now()}}
+function newHostState(code){return {code,catSel:RANDOM,round:0,phase:"lobby",players:[{cid:me.cid,name:me.name}],inRound:[],liar:null,cw:"",lw:"",catName:"",first:null,votes:{},candidates:null,revote:false,result:null,used:[],talkSec:120,voteSec:60,deadline:null,phaseTotal:0,ready:{},ts:Date.now()}}
 const pName = cid => (H.players.find(p=>p.cid===cid)||{}).name || "?";
 const isOnline = cid => cid===me.cid || !!(conns[cid] && conns[cid].open);
 function hostSave(){H.ts=Date.now();ls.set("liar.host",H)}
@@ -157,10 +158,27 @@ function startRound(){
   if(ids.length<3)return "온라인 인원이 3명 이상이어야 해요";
   const pk = pickPair();
   Object.assign(H,pk,{round:H.round+1,phase:"play",inRound:ids,liar:ids[Math.floor(Math.random()*ids.length)],first:ids[Math.floor(Math.random()*ids.length)],votes:{},candidates:null,revote:false,result:null,alive:ids.slice(),out:[],lastOut:null,turn:1});
+  setTimer(H.talkSec||120);
   return null;
 }
-function startVote(){H.phase="vote";H.votes={};H.candidates=null;H.revote=false}
-function continueTalk(){H.phase="play";H.turn=(H.turn||1)+1;H.first=H.alive[Math.floor(Math.random()*H.alive.length)];H.votes={};H.candidates=null;H.revote=false}
+function setTimer(sec){H.deadline=Date.now()+sec*1000;H.phaseTotal=sec*1000;H.ready={}}
+function startVote(){H.phase="vote";H.votes={};H.candidates=null;H.revote=false;setTimer(H.voteSec||60)}
+function continueTalk(){H.phase="play";H.turn=(H.turn||1)+1;H.first=H.alive[Math.floor(Math.random()*H.alive.length)];H.votes={};H.candidates=null;H.revote=false;setTimer(H.talkSec||120)}
+function advance(){
+  if(H.phase==="play")startVote();
+  else if(H.phase==="vote"){if(!Object.keys(H.votes).length){setTimer(30);return}tally();if(H.phase==="vote"&&!H.revote)setTimer(30)}
+  else if(H.phase==="out")continueTalk();
+}
+function readyToggle(cid){
+  if(!["play","out"].includes(H.phase)||!H.alive.includes(cid))return;
+  if(H.ready[cid])delete H.ready[cid]; else H.ready[cid]=true;
+  checkReady();
+}
+function checkReady(){
+  if(!["play","out"].includes(H.phase))return;
+  const need=H.alive.filter(isOnline);
+  if(need.length&&need.every(c=>H.ready[c]))advance();
+}
 function castVote(voter,target){
   if(H.phase!=="vote"||!H.alive.includes(voter)||voter===target)return;
   const cands = H.candidates||H.alive;
@@ -176,23 +194,25 @@ function tally(){
   const max = Math.max(0,...Object.values(cnt));
   if(max===0)return;
   const top = cands.filter(c=>cnt[c]===max);
-  if(top.length>1){H.candidates=top;H.votes={};H.revote=true;H.lastTie={names:top.map(pName),n:max};return}
+  if(top.length>1){H.candidates=top;H.votes={};H.revote=true;H.lastTie={names:top.map(pName),n:max};setTimer(H.voteSec||60);return}
   const target = top[0];
   const tl = H.alive.map(c=>({cid:c,n:cnt[c]||0})).sort((a,b)=>b.n-a.n);
-  if(target===H.liar){H.phase="result";H.result={target,isLiar:true,liar:H.liar,tally:tl};return}
+  if(target===H.liar){H.phase="result";H.deadline=null;H.result={target,isLiar:true,liar:H.liar,tally:tl};return}
   H.out.push(target); H.alive=H.alive.filter(c=>c!==target); H.lastOut={target,tally:tl};
-  if(H.alive.length<=2){H.phase="result";H.result={target,isLiar:false,survived:true,liar:H.liar,tally:tl};return}
-  H.phase="out";
+  if(H.alive.length<=2){H.phase="result";H.deadline=null;H.result={target,isLiar:false,survived:true,liar:H.liar,tally:tl};return}
+  H.phase="out";setTimer(20);
 }
 function makeView(cid){
   const inR = H.inRound.includes(cid);
   const v = {
     code:H.code, phase:H.phase, me:cid, isHost:cid===me.cid, round:H.round, catSel:H.catSel,
-    players:H.players.map(p=>({cid:p.cid,name:p.name,online:isOnline(p.cid),host:p.cid===me.cid,inRound:H.inRound.includes(p.cid),alive:(H.alive||[]).includes(p.cid),voted:!!H.votes[p.cid]})),
+    players:H.players.map(p=>({cid:p.cid,name:p.name,online:isOnline(p.cid),host:p.cid===me.cid,inRound:H.inRound.includes(p.cid),alive:(H.alive||[]).includes(p.cid),voted:!!H.votes[p.cid],ready:!!(H.ready||{})[p.cid]})),
     alive:(H.alive||[]).includes(cid), turn:H.turn||1, aliveN:(H.alive||[]).length, outNames:(H.out||[]).map(pName),
     inRound:inR, catName:H.phase==="lobby"?"":H.catName, firstName:H.first?pName(H.first):"",
     word: inR && H.phase!=="lobby" ? (cid===H.liar?H.lw:H.cw) : null,
     candidates:H.candidates||H.alive||[], revote:H.revote, tie:H.revote?H.lastTie:null,
+    remainMs:H.deadline&&["play","vote","out"].includes(H.phase)?Math.max(0,H.deadline-Date.now()):null, totalMs:H.phaseTotal||0, talkSec:H.talkSec||120,
+    meReady:!!(H.ready||{})[cid], readyN:(H.alive||[]).filter(c=>isOnline(c)&&(H.ready||{})[c]).length,
     myVote:H.votes[cid]||null, votedN:Object.keys(H.votes).length, needN:(H.alive||[]).filter(isOnline).length
   };
   if(H.phase==="out"){const o=H.lastOut;v.out={name:pName(o.target),isMe:o.target===cid,tally:o.tally.concat([{cid:o.target,n:0}]).filter((t,i,a)=>a.findIndex(x=>x.cid===t.cid)===i).map(t=>({name:pName(t.cid),n:t.n,hot:t.cid===o.target}))}}
@@ -210,6 +230,8 @@ function broadcast(){
 function hostAct(a,arg){
   let err=null;
   if(a==="cat"){H.catSel=arg}
+  else if(a==="talk"){H.talkSec=arg}
+  else if(a==="ready"){readyToggle(me.cid)}
   else if(a==="start"||a==="next"){err=startRound()}
   else if(a==="vote-start"){startVote()}
   else if(a==="continue"){continueTalk()}
@@ -254,6 +276,7 @@ function openHostPeer(tries){
 let resumeAttempt=false;
 function onPlayerLeft(){
   if(H.phase==="vote"){const need=H.alive.filter(isOnline);if(need.length&&need.every(c=>H.votes[c]))tally()}
+  checkReady();
   broadcast();
 }
 function hostOnData(conn,d){
@@ -265,6 +288,7 @@ function hostOnData(conn,d){
     if(conns[cid]&&conns[cid]!==conn){try{conns[cid].close()}catch(e){}}
     conns[cid]=conn; broadcast();
   } else if(d.t==="vote"&&conn.cid){castVote(conn.cid,String(d.target)); broadcast()}
+  else if(d.t==="ready"&&conn.cid){readyToggle(conn.cid); broadcast()}
 }
 
 /* =================== GUEST =================== */
@@ -308,7 +332,14 @@ function guestConnect(){
 function guestVote(target){if(hostConn&&hostConn.open){hostConn.send({t:"vote",target});if(view){view.myVote=target;render()}}}
 
 /* =================== COMMON =================== */
-function act(a,arg){ if(mode==="host")hostAct(a,arg); else if(a==="vote")guestVote(arg); }
+function act(a,arg){ if(mode==="host")hostAct(a,arg); else if(a==="vote")guestVote(arg); else if(a==="ready"&&hostConn&&hostConn.open){hostConn.send({t:"ready"});if(view){view.meReady=!view.meReady;render()}} }
+setInterval(()=>{if(mode==="host"&&H&&H.deadline&&["play","vote","out"].includes(H.phase)&&Date.now()>=H.deadline){advance();broadcast()}},500);
+function fmt(ms){const t=Math.max(0,Math.ceil(ms/1000));return Math.floor(t/60)+":"+String(t%60).padStart(2,"0")}
+function tickTimers(){for(const el of document.querySelectorAll(".timer")){const dl=+el.dataset.dl,tot=+el.dataset.tot,left=Math.max(0,dl-Date.now());el.querySelector(".tt").textContent=fmt(left);el.querySelector("i").style.width=(tot?Math.min(100,left/tot*100):0)+"%";el.classList.toggle("hurry",left<=10000)}}
+setInterval(tickTimers,250);
+function timerHtml(v,label){if(v.remainMs==null)return "";if(!v._dl)v._dl=Date.now()+v.remainMs;return `<div class="timer" data-dl="${v._dl}" data-tot="${v.totalMs}"><span class="tl">${label}</span><b class="tt">${fmt(v._dl-Date.now())}</b><div class="meter"><i></i></div></div>`}
+function readyBtn(v,txt){if(!v.alive)return `<p class="mute small" style="text-align:center;margin-top:14px">남은 사람들이 진행 중…</p>`;return `<button class="btn ${v.meReady?"":"pri"}" data-a="ready">${v.meReady?"✓ 기다리는 중 (취소)":txt} · ${v.readyN}/${v.needN}</button>`}
+const talkChips=v=>`<div class="label">토크 최대 시간</div><div class="chips">${[60,90,120,180,300].map(t=>`<button class="chip${t===v.talkSec?" on":""}" data-a="talk" data-v="${t}">${t<120?t+"초":t/60+"분"}</button>`).join("")}</div>`;
 function leave(){
   left=true; clearTimeout(retryT);
   if(mode==="host")ls.del("liar.host"); else ls.del("liar.guest");
@@ -337,16 +368,17 @@ function render(){
   h+=`<button class="btn ghost" data-a="leave">${v.isHost?"방 닫기":"방 나가기"}</button>`;
   app.innerHTML=h;
   const f=document.getElementById("flip"); if(f&&cardOpen)f.classList.add("open");
+  tickTimers();
 }
 function plist(v,showVoted){
-  return `<div class="plist">${v.players.map(p=>`<div class="p${p.online?"":" off"}"><span class="nm">${esc(p.name)}${p.cid===v.me?" (나)":""}</span>${p.host?'<span class="tag">방장</span>':""}${v.phase!=="lobby"&&p.inRound&&!p.alive?'<span class="tag">탈락</span>':""}${!p.online?'<span class="tag">연결끊김</span>':""}${showVoted&&p.alive?(p.voted?'<span class="tag ok">투표완료</span>':'<span class="tag">고민중</span>'):""}${v.isHost&&!p.host&&v.phase==="lobby"?`<button class="x" data-a="kick" data-v="${esc(p.cid)}" aria-label="내보내기">×</button>`:""}</div>`).join("")}</div>`;
+  return `<div class="plist">${v.players.map(p=>`<div class="p${p.online?"":" off"}"><span class="nm">${esc(p.name)}${p.cid===v.me?" (나)":""}</span>${p.host?'<span class="tag">방장</span>':""}${v.phase!=="lobby"&&p.inRound&&!p.alive?'<span class="tag">탈락</span>':""}${!p.online?'<span class="tag">연결끊김</span>':""}${(v.phase==="play"||v.phase==="out")&&p.alive&&p.ready?'<span class="tag ok">준비</span>':""}${showVoted&&p.alive?(p.voted?'<span class="tag ok">투표완료</span>':'<span class="tag">고민중</span>'):""}${v.isHost&&!p.host&&v.phase==="lobby"?`<button class="x" data-a="kick" data-v="${esc(p.cid)}" aria-label="내보내기">×</button>`:""}</div>`).join("")}</div>`;
 }
 function renderLobby(v){
   let h=`<h2>대기실</h2>`;
   if(v.isHost){
     h+=`<div class="codebox"><div class="small" style="opacity:.6;font-weight:800">방 코드</div><div class="big">${esc(v.code)}</div></div>
     <button class="btn pri" data-a="copy">카톡에 보낼 링크 복사</button><p class="mute small" id="copyMsg">링크 누르면 코드 자동 입력돼요. 이 화면은 게임 끝날 때까지 켜두세요!</p>
-    <div class="label">카테고리</div><div class="chips">${[...DATA.map((d,i)=>[i,d[0]]),[RANDOM,"랜덤"]].map(([i,n])=>`<button class="chip${i===v.catSel?" on":""}" data-a="cat" data-v="${i}">${n}</button>`).join("")}</div>`;
+    <div class="label">카테고리</div><div class="chips">${[...DATA.map((d,i)=>[i,d[0]]),[RANDOM,"랜덤"]].map(([i,n])=>`<button class="chip${i===v.catSel?" on":""}" data-a="cat" data-v="${i}">${n}</button>`).join("")}</div>${talkChips(v)}`;
   } else h+=`<p class="mute">방장이 시작하면 카드가 나와요. 기다리는 중…</p>`;
   h+=`<div class="label">참가자 ${v.players.length}명</div>${plist(v)}`;
   if(v.isHost){const n=v.players.filter(p=>p.online).length;h+=`<button class="btn pri" data-a="start" ${n<3?"disabled":""}>${n<3?`3명부터 시작 가능 (지금 ${n}명)`:"게임 시작"}</button>`}
@@ -360,19 +392,20 @@ function cardHtml(v){
 function renderPlay(v){
   const key=v.code+v.round; if(key!==lastWordKey){lastWordKey=key;cardOpen=false}
   let h=`<h2>${v.round}라운드${v.turn>1?` · ${v.turn}번째 토크`:""}</h2>${!v.alive?`<div class="info" style="margin-bottom:10px"><b>탈락했어요.</b> 이제 관전만! 라이어 정체는 스포 금지 🤐</div>`:""}${cardHtml(v)}<div class="info"><b>${esc(v.firstName)}</b>부터 시계방향으로 한 마디씩!${v.outNames.length?`<br><span class="mute small">탈락: ${v.outNames.map(esc).join(", ")} · 남은 ${v.aliveN}명</span>`:""}</div>`;
-  if(v.isHost)h+=`<button class="btn pri" data-a="vote-start">토크 끝! 투표 시작</button><button class="btn" data-a="next">제시어 바꿔서 다시</button>`;
-  else h+=`<p class="mute small" style="text-align:center;margin-top:14px">방장이 투표를 열면 여기서 투표해요</p>`;
+  h+=timerHtml(v,"토크 남은 시간")+readyBtn(v,"토크 끝! 투표하자");
+  h+=`<p class="mute small" style="text-align:center">남은 사람 모두 누르거나 시간이 끝나면 투표로 넘어가요</p>${plist(v)}`;
+  if(v.isHost)h+=`<button class="btn ghost" data-a="next">제시어 바꿔서 다시 (방장)</button>`;
   return h;
 }
 function renderVote(v){
-  let h=`<h2>${v.revote?"동점! 재투표":"라이어는 누구?"}</h2>`;
-  if(!v.alive){return h+`<div class="info"><b>탈락해서 투표 못 해요.</b><br><span class="mute">남은 사람들이 투표하는 중…</span></div><div class="label">투표 ${v.votedN}/${v.needN}</div><div class="meter"><i style="width:${v.needN?Math.round(v.votedN/v.needN*100):0}%"></i></div>${plist(v,true)}`+(v.isHost?`<button class="btn" data-a="tally" ${v.votedN?"":"disabled"}>지금 바로 개표</button>`:"")}
+  let h=`<h2>${v.revote?"동점! 재투표":"라이어는 누구?"}</h2>`+timerHtml(v,"투표 남은 시간");
+  if(!v.alive){return h+`<div class="info"><b>탈락해서 투표 못 해요.</b><br><span class="mute">남은 사람들이 투표하는 중…</span></div><div class="label">투표 ${v.votedN}/${v.needN}</div><div class="meter"><i style="width:${v.needN?Math.round(v.votedN/v.needN*100):0}%"></i></div>${plist(v,true)}`+(v.isHost?`<button class="btn" data-a="tally" ${v.votedN?"":"disabled"}>지금 바로 개표 (방장)</button>`:"")}
   if(v.tie)h+=`<p class="mute">${v.tie.names.map(esc).join(", ")} 동점. 한 마디씩 더 해명하고 다시 투표!</p>`;
   else h+=`<p class="mute">자기 자신은 못 찍어요. 바꾸고 싶으면 다시 누르면 돼요.</p>`;
   h+=`<div class="vgrid">${v.candidates.map(cid=>{const p=v.players.find(x=>x.cid===cid)||{name:"?"};return `<button class="vbtn${v.myVote===cid?" on":""}" data-a="vote" data-v="${esc(cid)}" ${cid===v.me?"disabled":""}>${esc(p.name)}${cid===v.me?"<br><span class='small'>(나)</span>":""}</button>`}).join("")}</div>`;
   h+=`<div class="label">투표 ${v.votedN}/${v.needN}</div><div class="meter"><i style="width:${v.needN?Math.round(v.votedN/v.needN*100):0}%"></i></div>${plist(v,true)}`;
   h+=`<details style="margin-top:12px"><summary class="mute small">내 제시어 다시 보기</summary>${cardHtml(v)}</details>`;
-  if(v.isHost)h+=`<button class="btn" data-a="tally" ${v.votedN?"":"disabled"}>지금 바로 개표</button>`;
+  if(v.isHost)h+=`<button class="btn" data-a="tally" ${v.votedN?"":"disabled"}>지금 바로 개표 (방장)</button>`;
   return h;
 }
 function renderOut(v){
@@ -380,8 +413,7 @@ function renderOut(v){
   let h=`<div class="result lose"><div class="big">${esc(o.name)} 탈락</div><div style="font-weight:600">${o.isMe?"당신은":esc(o.name)+"은(는)"} 시민이었습니다.<br>라이어는 아직 숨어 있다… 남은 ${v.aliveN}명</div></div>`;
   h+=`<div class="label">득표</div><div class="tally">${o.tally.map(t=>`<div class="trow${t.hot?" hot":""}"><span>${esc(t.name)}</span><span class="tb"><i style="width:${t.n/max*100}%"></i></span><span>${t.n}</span></div>`).join("")}</div>`;
   h+=`<p class="mute small" style="margin-top:12px">${v.aliveN<=3?"⚠️ 한 명만 더 시민이 탈락하면 라이어 승리!":"남은 사람끼리 한 바퀴 더 토크하고 다시 투표해요."}</p>`;
-  if(v.isHost)h+=`<button class="btn pri" data-a="continue">다시 토크 → 투표</button>`;
-  else h+=`<p class="mute small" style="text-align:center">방장이 다음 토크를 시작하면 진행돼요</p>`;
+  h+=timerHtml(v,"다음 토크까지")+readyBtn(v,"확인! 다음 토크");
   return h;
 }
 function renderResult(v){
@@ -391,7 +423,7 @@ function renderResult(v){
   if(r.iWasLiar)h+=`<p style="text-align:center;font-weight:800">사실 당신이 라이어였습니다 🤫</p>`;
   h+=`<div class="words"><div><span class="small mute">시민 제시어</span><b>${esc(r.cw)}</b></div><div><span class="small mute">라이어 제시어</span><b>${esc(r.lw)}</b></div></div>`;
   h+=`<div class="label">득표</div><div class="tally">${r.tally.map(t=>`<div class="trow${t.hot?" hot":""}"><span>${esc(t.name)}</span><span class="tb"><i style="width:${t.n/max*100}%"></i></span><span>${t.n}</span></div>`).join("")}</div>`;
-  if(v.isHost)h+=`<div class="label">다음 판 카테고리</div><div class="chips">${[...DATA.map((d,i)=>[i,d[0]]),[RANDOM,"랜덤"]].map(([i,n])=>`<button class="chip${i===v.catSel?" on":""}" data-a="cat" data-v="${i}">${n}</button>`).join("")}</div><button class="btn pri" data-a="next">다음 라운드</button><button class="btn" data-a="lobby">대기실로</button>`;
+  if(v.isHost)h+=`<div class="label">다음 판 카테고리</div><div class="chips">${[...DATA.map((d,i)=>[i,d[0]]),[RANDOM,"랜덤"]].map(([i,n])=>`<button class="chip${i===v.catSel?" on":""}" data-a="cat" data-v="${i}">${n}</button>`).join("")}</div>${talkChips(v)}<button class="btn pri" data-a="next">다음 라운드</button><button class="btn" data-a="lobby">대기실로</button>`;
   else h+=`<p class="mute small" style="text-align:center;margin-top:14px">방장이 다음 라운드를 시작하면 새 카드가 나와요</p>`;
   return h;
 }
@@ -412,7 +444,7 @@ function renderHome(){
   <li>한 명이 방 만들고 링크를 단톡에 뿌려요. 방장 폰 화면은 켜두기.</li>
   <li>다들 링크 열고 이름 쓰고 참가. 방장이 카테고리 고르고 시작.</li>
   <li>카드 뒤집으면 제시어. 한 명만 비슷한 <b>다른 단어</b>를 받는데 그게 라이어. 본인은 몰라요.</li>
-  <li>순서대로 한 마디씩 설명하고, 방장이 투표 열면 각자 폰으로 투표.</li>
+  <li>순서대로 한 마디씩 설명. 다들 "투표하자"를 누르거나 토크 시간이 끝나면 각자 폰으로 투표 (60초).</li>
   <li>최다 득표자가 시민이면 그 사람만 탈락하고, 남은 사람끼리 다시 토크·투표. 라이어를 잡으면 시민 승, 라이어가 최후 2인까지 살아남으면 라이어 승. 동점이면 재투표.</li></ol></details>`;
 }
 function readName(){
@@ -435,6 +467,7 @@ app.addEventListener("click",async e=>{
     try{await navigator.clipboard.writeText(txt);document.getElementById("copyMsg").textContent="복사됨! 단톡에 붙여넣기 하세요."}
     catch(err){const m=document.getElementById("copyMsg");m.innerHTML="복사가 막혔어요. 이 링크를 꾹 눌러 복사하세요:<br><b style='user-select:all;word-break:break-all'>"+esc(shareLink(view.code))+"</b>"}}
   else if(a==="cat")act("cat",+v);
+  else if(a==="talk")act("talk",+v);
   else if(a==="vote"){if(view&&view.myVote===v)return;act("vote",v)}
   else act(a,v);
 });
